@@ -147,7 +147,6 @@ class NodeList:
         self.list.append(node)
 
     def __bool__(self):
-        log.debug("NodeList bool: len(list):%s, bool(list):%s" % (len(self.list), bool(self.list)))
         return bool(self.list)
 
     def get_node_by_id(self, node_id):
