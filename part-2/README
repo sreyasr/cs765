@@ -1,0 +1,44 @@
+The program uses python3 and some modules used requires atleast python 3.7
+We used python 3.8.2 for testing the program
+
+
+Usage:
+
+
+Seed.py
+--------------------------------------------------------------------------------
+python3 Seed.py [-h] [-ip IP] [-port PORT] [-out OUT]
+e.g.    : python3 Seed.py -port 44163 -out outputseed.txt -ip localhost
+
+
+
+
+Peer.py
+---------------------------------------------------------------------------------
+python3 Peer.py [-h] [-ip IP] [-port PORT] [-in INPUT] [-out OUT]
+e.g.    : python3 Peer.py -in seed_list -ip localhost -port 8922 -in seed_list
+
+
+
+config.txt
+--------------------------------------------------------------------------------
+The file contain ip and port separated by a comma. Each address will on a newline
+
+
+
+The outputs outputpeer.txt and outputpeer.txt are made using the following commands in different terminal:
+--------------------------------------------------------------------------------------
+python3 Seed.py -ip localhost -port 44163 -out outputseed.txt 
+python3 Peer.py -ip localhost -port 8921 -in config.txt
+python3 Peer.py -ip localhost -port 8922 -out outputpeer.txt -in config.txt
+python3 Peer.py -ip localhost -port 8923 -in config.txt
+--------------------------------------------------------------------------------------
+The output is that of peer-2 with port 8922 and peer-1 with port 8921 is closed halfway
+
+
+Gossip Message:
+--------------------------------------------------------------------------------------
+The gossip message follows given in the question
+<self.timestamp>:<self.IP>:<self.Msg#>
+
+self.Msg# is replaced by Message-#
