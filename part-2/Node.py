@@ -175,19 +175,6 @@ class PeerNodeList(NodeList):
         t = [peer_node.send_block(block_no, prev_hash, merkel_root, timestamp) for peer_node in self]
         await asyncio.gather(*t)
 
-    async def gossip_broadcast(self, my_ip, my_port, content):
-        t = [peer_node.send_gossip_message(my_ip, my_port, content) for peer_node in self]
-        await asyncio.gather(*t)
-
-    async def liveness_request_broadcast(self, my_ip, my_port):
-        t = [peer_node.send_liveness_request(my_ip, my_port) for peer_node in self]
-        await asyncio.gather(*t)
-
-    async def gossip_forward_broadcast(self, my_ip, my_port, content, received_peer_node):
-        t = [peer_node.send_gossip_message(my_ip, my_port, content) for peer_node in self if
-             peer_node != received_peer_node.id]
-        await asyncio.gather(*t)
-
     def remove_peer_node(self, peer_node):
         try:
             peer_node.writer.close()
