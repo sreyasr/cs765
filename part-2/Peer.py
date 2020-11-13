@@ -47,9 +47,6 @@ class Peer:
     def __init__(self, ip="localhost", port=0, output_file=None, input_file="config.txt"):
         self.ip = ip
         self.port = port
-        self.total_peer_list = []  # all peer list received from seed
-        # total seed obtained from file will be used to send liveness_check and gossip; d[address] = reader,writer)
-        self.peer_list = []
 
         self.file_name = input_file  # file from seed will be acquired
 
@@ -118,11 +115,13 @@ class Peer:
                 block_no = int(key)
                 blocks = list(map(lambda x: Block(block_no, *x[1:]), value))
                 self.block_chain_history[block_no] = blocks
+            self.pending_queue_event.set()
         elif data['message_type'] == 'Recent_Blocks_Response':
             recent_blocks = data['recent_blocks']
             block_no = data['block_no']
             blocks = map(lambda x: Block(block_no, *x[1:]), recent_blocks)
             self.block_chain_history[block_no] = list(blocks)
+            self.recent_blocks_event.set()
 
     # handle the peer messages: liveness request, liveness reply etc...
     async def handle_peer_messages(self, peer_node):
@@ -151,12 +150,8 @@ class Peer:
             peer_node = self.peer_node_list.create_node(ip, port, True, con_ip, con_port)
             peer_node.writer = writer
             peer_node.reader = reader
-
+            log.info("Connection from: %s %s" % (ip, port))
             if data['message_type'] == 'Registration_Request':
-                peer_address = data['SELF_IP'], data['SELF_PORT']
-                if peer_address not in self.total_peer_list:
-                    self.total_peer_list.append(peer_address)
-
                 await self.handle_peer_messages(peer_node)
 
         async def run_server(host, port):
@@ -198,24 +193,17 @@ class Peer:
 
     # return the entire list of peer received from seeds
     async def get_peer_from_seed(self, seed_list):
-        peer_list = []
         for address in seed_list:
-            peer_node = PeerNode(address[0], address[1], False)
+            peer_node = self.peer_node_list.create_node(address[0], address[1], False)
             await peer_node.send_registration_request(self.ip, self.port)
-            peer_list.append(peer_node)
-        return peer_list
 
-    async def establish_peer_connection(self, peer_list):
-        self.peer_list = peer_list
-
-        await asyncio.gather(*[self.handle_peer_messages(i) for i in self.peer_list])
+    async def establish_peer_connection(self):
+        await asyncio.gather(*[self.handle_peer_messages(i) for i in self.peer_node_list])
 
     async def initial_set_up(self):
-        while len(self.peer_list) == 0:
+        while len(self.peer_node_list) == 0:
             await asyncio.sleep(3)
-        if len(self.peer_list) == 0:
-            return
-        peer_node = self.peer_list[0]
+        peer_node = self.peer_node_list[0]
         await peer_node.send_recent_block_request()
         await self.recent_blocks_event.wait()
         peer_node.send_recent_block_request()
@@ -240,9 +228,9 @@ class Peer:
         # get the seed from the file config.txt
         seed_list = self.get_seed_from_file()
         # get peer from the seeds
-        peer_list = await self.get_peer_from_seed(seed_list)
+        await self.get_peer_from_seed(seed_list)
 
-        await asyncio.gather(main_server.serve_forever(), self.establish_peer_connection(peer_list),
+        await asyncio.gather(main_server.serve_forever(), self.establish_peer_connection(),
                              self.consume_block_queue(), self.process_pending_queue())
 
 
