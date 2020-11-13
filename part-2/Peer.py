@@ -56,10 +56,9 @@ class Peer:
 
         self.block_chain_history = {0: [genesis_block]}
         self.mining_time = 100
-        self.new_block = False
+        self.new_mining_block = False
         self.block_queue = list()
         self.pending_queue = deque()
-        self.blocks_configured = False
         self.recent_blocks_event = asyncio.Event()
         self.pending_queue_event = asyncio.Event()
         self.block_height = 0
@@ -75,14 +74,15 @@ class Peer:
         print(text)
 
     def append_block(self, block):
-        (self.block_chain_history.get(block.block_index, None) or list()).append(block)
+        self.block_chain_history[block.block_index] = (self.block_chain_history.get(block.block_index, None) or list())
+        self.block_chain_history[block.block_index].append(block)
 
     async def mine_block(self):
         await self.pending_queue_event.wait()
         while True:
             for _ in range(self.mining_time):
                 await asyncio.sleep(1)
-                if self.new_block:
+                if self.new_mining_block:
                     break
             block_no = len(self.block_chain_history)
             block = get_block(block_no, self.block_chain_history[block_no - 1][0].hash, "0000", str(int(time.time())))
@@ -209,15 +209,12 @@ class Peer:
         peer_node.send_recent_block_request()
 
     async def process_pending_queue(self):
-        while self.blocks_configured is False:
-            await asyncio.sleep(2)
-
+        await self.pending_queue_event.wait()
         while True:
             block = self.pending_queue.popleft()
             if self.is_block_valid(block):
                 x = datetime.now() + timedelta(seconds=int(exp_rand_var())), block
                 self.block_queue.append(x)
-                raise NotImplementedError
 
     # The entry point to all functions
     async def start(self):
