@@ -1,7 +1,6 @@
 import argparse
 import time
 from collections import deque
-from datetime import datetime, timedelta
 from hashlib import sha3_224
 
 import numpy
@@ -34,7 +33,7 @@ node_hash_power = 33
 def exp_rand_var():
     global_lambda = 1 / inter_arrival_time
     _lambda = node_hash_power * global_lambda / 100
-    waiting_time = numpy.random.exponential(scale=1.0, size=None)
+    waiting_time = numpy.random.exponential(scale=1.0 / _lambda, size=None)
     return waiting_time
 
 
@@ -57,13 +56,12 @@ class Peer:
         self.output_file = output_file
 
         self.block_chain_history = {0: [genesis_block]}
-        self.mining_time = 6
-        self.new_mining_block = False
         self.block_queue = list()
         self.pending_queue = deque()
         self.recent_blocks_event = asyncio.Event()
         self.pending_queue_event = asyncio.Event()
         self.initial_set_up_event = asyncio.Event()
+        self.new_mining_block_event = asyncio.Event()
         self.block_height = 0
 
         if output_file is not None:
@@ -84,16 +82,19 @@ class Peer:
         await self.pending_queue_event.wait()
         log.debug("Pending queue event set: Start mining")
         while True:
-            for _ in range(self.mining_time):
-                await asyncio.sleep(1)
-                if self.new_mining_block:
-                    break
-            block_no = len(self.block_chain_history)
-            block = get_block(block_no, self.block_chain_history[block_no - 1][0].hash, "0000", str(int(time.time())))
-            self.block_chain_history[block.block_index] = self.block_chain_history.get(block.block_index,
-                                                                                       None) or list()
-            self.block_chain_history[block.block_index].insert(0, block)
-            await self.peer_node_list.block_broadcast(block_no, block.prev_hash, block.merkel_root, block.timestamp)
+            try:
+                await asyncio.wait_for(self.new_mining_block_event.wait(), timeout=exp_rand_var())
+                log.debug("new mining block")
+                self.new_mining_block_event.clear()
+            except asyncio.TimeoutError:
+                block_no = len(self.block_chain_history)
+                block = get_block(block_no, self.block_chain_history[block_no - 1][0].hash, "0000",
+                                  str(int(time.time())))
+                self.block_chain_history[block.block_index] = self.block_chain_history.get(block.block_index,
+                                                                                           None) or list()
+                self.block_chain_history[block.block_index].insert(0, block)
+                await self.peer_node_list.block_broadcast(block_no, block.prev_hash, block.merkel_root, block.timestamp)
+                log.info("Created new block")
 
     def is_block_valid(self, block: Block):
         block_no = block.block_index
@@ -140,9 +141,9 @@ class Peer:
     async def handle_peer_messages(self, peer_node):
         while True:
             data = await peer_node.read()
-            log.debug("new message: %s" % data)
             if data is None:
                 break
+            log.debug("new message: %s" % data)
             for message in data:
                 await self.process(peer_node, message)
         peer_node.writer.close()
@@ -176,25 +177,6 @@ class Peer:
             return server
 
         return await run_server(self.ip, self.port)
-
-    async def consume_block_queue(self):
-        await self.pending_queue_event.wait()
-        while True:
-            req_list = []
-            del_list = []
-            for i in self.block_queue:
-                if i[0] > datetime.now():
-                    del_list.append(i)
-                else:
-                    req_list.append(i)
-            prev_len = len(self.block_chain_history)
-            for block_meta in del_list:
-                self.append_block(block_meta[1])
-            new_len = len(self.block_chain_history)
-            if new_len > prev_len:
-                self.new_mining_block = True
-            self.block_queue = req_list
-            await asyncio.sleep(1)
 
     # return list of seeds from file
     def get_seed_from_file(self):
@@ -240,16 +222,15 @@ class Peer:
         log.info("processing pending queue...")
         while True:
             if len(self.pending_queue) == 0:
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.1)
                 continue
             block = self.pending_queue.popleft()
+            log.debug("New item on pending queue")
             if self.is_block_valid(block):
-                x = datetime.now() + timedelta(seconds=int(exp_rand_var())), block
-                for i in range(len(self.block_queue)):
-                    if self.block_queue[i][1].prev_hash == block.prev_hash:
-                        self.block_queue[i] = x
-                        return
-                self.block_queue.append(x)
+                prev_len = len(self.block_chain_history)
+                if block.block_index == prev_len:
+                    self.new_mining_block_event.set()
+                self.append_block(block)
 
     # The entry point to all functions
     async def start(self):
@@ -266,8 +247,7 @@ class Peer:
         await self.get_peer_from_seed(seed_list)
 
         await asyncio.gather(main_server.serve_forever(), self.establish_peer_connection(),
-                             self.consume_block_queue(), self.process_pending_queue(), self.mine_block(),
-                             self.initial_set_up())
+                             self.process_pending_queue(), self.mine_block(), self.initial_set_up())
 
 
 async def main():
