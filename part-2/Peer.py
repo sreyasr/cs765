@@ -1,5 +1,4 @@
 import argparse
-import random
 import time
 from collections import deque
 from datetime import datetime, timedelta
@@ -14,7 +13,7 @@ log = logging.getLogger(__name__)
 log.setLevel(logging.DEBUG)
 
 stdout_handler = logging.StreamHandler()
-stdout_handler.setLevel(logging.CRITICAL)
+stdout_handler.setLevel(logging.DEBUG)
 
 log.addHandler(stdout_handler)
 
@@ -37,30 +36,6 @@ def exp_rand_var():
     return _waiting_time
 
 
-class MessageList:
-    def __init__(self):
-        self.dict = dict()
-
-    def __getitem__(self, item):
-        hash_item = md5(item.encode()).hexdigest()
-        return self.dict[hash_item]
-
-    def __setitem__(self, key, value):
-        hash_key = md5(key.encode()).hexdigest()
-        self.dict[hash_key] = value
-
-    def __len__(self):
-        return len(self.dict)
-
-    def get(self, item, default=None):
-        hash_item = md5(item.encode()).hexdigest()
-        return self.dict.get(hash_item, default) or list()
-
-    def __contains__(self, item):
-        hash_item = md5(item.encode()).hexdigest()
-        return hash_item in self.dict
-
-
 genesis_block = Block(0, "0000", "0000", "27858", "9e1c")
 
 
@@ -74,11 +49,9 @@ class Peer:
         self.port = port
         self.total_peer_list = []  # all peer list received from seed
         # total seed obtained from file will be used to send liveness_check and gossip; d[address] = reader,writer)
-        self.total_seed_list = list()
         self.peer_list = []
 
         self.file_name = input_file  # file from seed will be acquired
-        self.message_list = MessageList()  # map hash to a list of address whom received the message
 
         self.main_server_event = asyncio.Event()
         self.peer_node_list = PeerNodeList()
@@ -158,6 +131,7 @@ class Peer:
             if data is None:
                 break
             for message in data:
+                log.info("message:\n%s" % message)
                 self.process(peer_node, message)
         peer_node.writer.close()
 
@@ -186,6 +160,7 @@ class Peer:
                 await self.handle_peer_messages(peer_node)
 
         async def run_server(host, port):
+            log.info("Starting main server on %s %s" % (host, port))
             server = await asyncio.start_server(main_server, host, port)
             self.ip, self.port = server.sockets[0].getsockname()
             self.main_server_event.set()
@@ -219,8 +194,7 @@ class Peer:
                 port = int(address[1])
                 address = (ip, port)
                 seed_list.append(address)
-        self.total_seed_list = list(set(seed_list))
-        return self.total_seed_list
+        return list(set(seed_list))
 
     # return the entire list of peer received from seeds
     async def get_peer_from_seed(self, seed_list):
@@ -232,8 +206,7 @@ class Peer:
         return peer_list
 
     async def establish_peer_connection(self, peer_list):
-        self.peer_list = list(set(peer_list))
-        self.total_peer_list = list(set(self.total_peer_list + self.peer_list))
+        self.peer_list = peer_list
 
         await asyncio.gather(*[self.handle_peer_messages(i) for i in self.peer_list])
 
@@ -265,12 +238,7 @@ class Peer:
         main_server = await task1
         await self.main_server_event.wait()
         # get the seed from the file config.txt
-        self.total_seed_list = self.get_seed_from_file()
-        # find required number of seeds = floor(total seeds/2) + 1
-        required_seed_number = int(len(self.total_seed_list) / 2) + 1
-        # get a random list of required number seeds
-        seed_list = random.sample(
-            self.total_seed_list, required_seed_number)
+        seed_list = self.get_seed_from_file()
         # get peer from the seeds
         peer_list = await self.get_peer_from_seed(seed_list)
 
