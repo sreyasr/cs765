@@ -8,7 +8,7 @@ log = logging.getLogger(__name__)
 log.setLevel(logging.DEBUG)
 
 stdout_handler = logging.StreamHandler()
-stdout_handler.setLevel(logging.CRITICAL)
+stdout_handler.setLevel(logging.DEBUG)
 
 log.addHandler(stdout_handler)
 
@@ -104,10 +104,11 @@ class PeerNode(Node):
                    'prev_hash': prev_hash,
                    'merkel_root': merkel_root
                    }
+        log.info("Sending Block: %s" % message)
         await self.write(message)
 
     async def send_block_history_request(self):
-        message = {'message_type': 'block_history_request'}
+        message = {'message_type': 'Block_History_Request'}
         await self.write(message)
 
     async def send_block_history(self, block_history):
@@ -129,11 +130,11 @@ class PeerNode(Node):
         await self.write(msg)
 
     async def send_recent_block(self, block_history):
-        recent_blocks = block_history[-1]
-        block_no = len(block_history) - 1
+        maximum_pos = max(block_history.keys())
+        recent_blocks = block_history[maximum_pos]
         msg = {'message_type': 'Recent_Blocks_Response',
                'recent_blocks': recent_blocks,
-               'block_no': block_no}
+               'block_no': maximum_pos}
         await self.write(msg)
 
     async def send_recent_block_request(self):
