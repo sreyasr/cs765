@@ -27,13 +27,15 @@ def get_block(block_index, prev_hash, merkel_root, timestamp):
                  get_hash("%s:%s:%s" % (prev_hash, merkel_root, timestamp)))
 
 
+inter_arrival_time = 6
+node_hash_power = 33
+
+
 def exp_rand_var():
-    _inter_arrival_time = 6
-    _node_hash_power = 33
-    _global_lambda = 1 / _inter_arrival_time
-    _lambda = _node_hash_power * _global_lambda / 100
-    _waiting_time = numpy.random.exponential(scale=1.0, size=None)
-    return _waiting_time
+    global_lambda = 1 / inter_arrival_time
+    _lambda = node_hash_power * global_lambda / 100
+    waiting_time = numpy.random.exponential(scale=1.0, size=None)
+    return waiting_time
 
 
 genesis_block = Block(0, "0000", "0000", "110569", "9e1c")
@@ -87,12 +89,11 @@ class Peer:
                 if self.new_mining_block:
                     break
             block_no = len(self.block_chain_history)
-            log.debug("CHAIN: %s" % self.block_chain_history)
             block = get_block(block_no, self.block_chain_history[block_no - 1][0].hash, "0000", str(int(time.time())))
             self.block_chain_history[block.block_index] = self.block_chain_history.get(block.block_index,
                                                                                        None) or list()
             self.block_chain_history[block.block_index].insert(0, block)
-            log.info("new block: %s" % block)
+            log.info("new block: {}".format(block))
             await self.peer_node_list.block_broadcast(block_no, block.prev_hash, block.merkel_root, block.timestamp)
 
     def is_block_valid(self, block: Block):
@@ -200,6 +201,10 @@ class Peer:
         file_name = self.file_name
         seed_list = []
         with open(file_name, "r") as f:
+            global inter_arrival_time
+            inter_arrival_time = float(f.readline().split()[1])
+            global node_hash_power
+            node_hash_power = float(f.readline().split()[1])
             for line in f.readlines():
                 address = line.split(",")
                 ip = address[0]
@@ -277,6 +282,7 @@ async def main():
     output_file = args.out or "output_peer:%s:%s.txt" % (args.ip, args.port)
     peer = Peer(ip=args.ip, port=args.port, output_file=output_file, input_file=args.input)
     await peer.start()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
