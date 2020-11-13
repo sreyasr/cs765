@@ -104,7 +104,6 @@ class PeerNode(Node):
                    'prev_hash': prev_hash,
                    'merkel_root': merkel_root
                    }
-        log.info("Sending Block: %s" % message)
         await self.write(message)
 
     async def send_block_history_request(self):
@@ -112,7 +111,7 @@ class PeerNode(Node):
         await self.write(message)
 
     async def send_block_history(self, block_history):
-        message = {'message_type': 'block_history_reply',
+        message = {'message_type': 'Block_History_Reply',
                    'block_history': block_history}
         await self.write(message)
 

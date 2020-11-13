@@ -93,7 +93,6 @@ class Peer:
             self.block_chain_history[block.block_index] = self.block_chain_history.get(block.block_index,
                                                                                        None) or list()
             self.block_chain_history[block.block_index].insert(0, block)
-            log.info("new block: {}".format(block))
             await self.peer_node_list.block_broadcast(block_no, block.prev_hash, block.merkel_root, block.timestamp)
 
     def is_block_valid(self, block: Block):
@@ -123,7 +122,7 @@ class Peer:
             await peer_node.send_block_history(self.block_chain_history)
         elif data['message_type'] == 'Recent_Blocks_Request':
             await peer_node.send_recent_block(self.block_chain_history)
-        elif data['message_type'] == 'block_history_reply':
+        elif data['message_type'] == 'Block_History_Reply':
             block_history = data['block_history']
             for key, value in block_history.items():
                 block_no = int(key)
@@ -141,10 +140,10 @@ class Peer:
     async def handle_peer_messages(self, peer_node):
         while True:
             data = await peer_node.read()
+            log.debug("new message: %s" % data)
             if data is None:
                 break
             for message in data:
-                log.info("message:\n%s" % message)
                 await self.process(peer_node, message)
         peer_node.writer.close()
 
@@ -166,6 +165,7 @@ class Peer:
             peer_node.reader = reader
             log.info("Connection from: %s %s" % (ip, port))
             if data['message_type'] == 'Registration_Request':
+                log.info("Registration success from %s %s" % (ip, port))
                 await self.handle_peer_messages(peer_node)
 
         async def run_server(host, port):
@@ -218,6 +218,7 @@ class Peer:
         for address in seed_list:
             peer_node = self.peer_node_list.create_node(address[0], address[1], False)
             await peer_node.send_registration_request(self.ip, self.port)
+            await peer_node.write({'message_type': 'HELLO'})
         log.info("Completed Registration")
         self.initial_set_up_event.set()
 
@@ -226,14 +227,12 @@ class Peer:
 
     async def initial_set_up(self):
         await self.initial_set_up_event.wait()
-        log.info("Initial set up wait is over")
         if len(self.peer_node_list) == 0:
             return
         peer_node = self.peer_node_list[0]
-        log.info("Sending Block Request")
         await peer_node.send_recent_block_request()
+        log.info("Completed recent block request")
         await self.recent_blocks_event.wait()
-        log.info("Sending Block History Request")
         await peer_node.send_block_history_request()
 
     async def process_pending_queue(self):
