@@ -12,7 +12,7 @@ log = logging.getLogger(__name__)
 log.setLevel(logging.DEBUG)
 
 stdout_handler = logging.StreamHandler()
-stdout_handler.setLevel(logging.DEBUG)
+stdout_handler.setLevel(logging.INFO)
 
 log.addHandler(stdout_handler)
 
@@ -84,7 +84,7 @@ class Peer:
         while True:
             try:
                 await asyncio.wait_for(self.new_mining_block_event.wait(), timeout=exp_rand_var())
-                log.debug("new mining block")
+                log.debug("new block received. Mining Discontinued")
                 self.new_mining_block_event.clear()
             except asyncio.TimeoutError:
                 block_no = len(self.block_chain_history)
@@ -94,7 +94,7 @@ class Peer:
                                                                                            None) or list()
                 self.block_chain_history[block.block_index].insert(0, block)
                 await self.peer_node_list.block_broadcast(block_no, block.prev_hash, block.merkel_root, block.timestamp)
-                log.info("Created new block")
+                log.info("New_Block_Created: {}".format(block))
 
     def is_block_valid(self, block: Block):
         block_no = block.block_index
@@ -117,7 +117,9 @@ class Peer:
     # detect the incoming message received and act accordingly
     async def process(self, peer_node, data):
         if data['message_type'] == 'block_message':
-            block = get_block(data['block_no'], data['prev_hash'], data['timestamp'], data['merkel_root'])
+            block = get_block(data['block_no'], data['prev_hash'], data['merkel_root'], data['timestamp'])
+            if block.block_index == max(self.block_chain_history.keys()) + 1:
+                self.new_mining_block_event.set()
             self.pending_queue.append(block)
         elif data['message_type'] == 'Block_History_Request':
             await peer_node.send_block_history(self.block_chain_history)
@@ -164,13 +166,13 @@ class Peer:
             peer_node = self.peer_node_list.create_node(ip, port, True, con_ip, con_port)
             peer_node.writer = writer
             peer_node.reader = reader
-            log.info("Connection from: %s %s" % (ip, port))
+            log.debug("Connection from: %s %s" % (ip, port))
             if data['message_type'] == 'Registration_Request':
-                log.info("Registration success from %s %s" % (ip, port))
+                log.debug("Registration success from %s %s" % (ip, port))
                 await self.handle_peer_messages(peer_node)
 
         async def run_server(host, port):
-            log.info("Starting main server on %s %s" % (host, port))
+            log.debug("Starting main server on %s %s" % (host, port))
             server = await asyncio.start_server(main_server, host, port)
             self.ip, self.port = server.sockets[0].getsockname()
             self.main_server_event.set()
@@ -201,7 +203,7 @@ class Peer:
             peer_node = self.peer_node_list.create_node(address[0], address[1], False)
             await peer_node.send_registration_request(self.ip, self.port)
             await peer_node.write({'message_type': 'HELLO'})
-        log.info("Completed Registration")
+        log.debug("Completed Registration")
         self.initial_set_up_event.set()
 
     async def establish_peer_connection(self):
@@ -213,24 +215,23 @@ class Peer:
             return
         peer_node = self.peer_node_list[0]
         await peer_node.send_recent_block_request()
-        log.info("Completed recent block request")
+        log.debug("Completed recent block request")
         await self.recent_blocks_event.wait()
         await peer_node.send_block_history_request()
 
     async def process_pending_queue(self):
         await self.pending_queue_event.wait()
-        log.info("processing pending queue...")
+        log.debug("processing pending queue...")
         while True:
             if len(self.pending_queue) == 0:
                 await asyncio.sleep(0.1)
                 continue
             block = self.pending_queue.popleft()
-            log.debug("New item on pending queue")
             if self.is_block_valid(block):
-                prev_len = len(self.block_chain_history)
-                if block.block_index == prev_len:
-                    self.new_mining_block_event.set()
+                log.info("Received_Valid_Block: {}".format(block))
                 self.append_block(block)
+            else:
+                log.info("Received_Invalid_Block: {}".format(block))
 
     # The entry point to all functions
     async def start(self):
