@@ -2,7 +2,7 @@ import argparse
 import time
 from collections import deque
 from datetime import datetime, timedelta
-from hashlib import sha256
+from hashlib import sha3_224
 
 import numpy
 
@@ -19,7 +19,7 @@ log.addHandler(stdout_handler)
 
 
 def get_hash(key):
-    return sha256(key.encode()).hexdigest()[:4]
+    return sha3_224(key.encode()).hexdigest()[-4:]
 
 
 def get_block(block_index, prev_hash, merkel_root, timestamp):
@@ -28,15 +28,15 @@ def get_block(block_index, prev_hash, merkel_root, timestamp):
 
 
 def exp_rand_var():
-    _inter_arrival_time = 60
-    _node_hash_power = 0.2
+    _inter_arrival_time = 6
+    _node_hash_power = 33
     _global_lambda = 1 / _inter_arrival_time
     _lambda = _node_hash_power * _global_lambda / 100
     _waiting_time = numpy.random.exponential(scale=1.0, size=None)
     return _waiting_time
 
 
-genesis_block = Block(0, "0000", "0000", "27858", "9e1c")
+genesis_block = Block(0, "0000", "0000", "110569", "9e1c")
 
 
 #  class peer to store information of peer
@@ -92,6 +92,7 @@ class Peer:
             self.block_chain_history[block.block_index] = self.block_chain_history.get(block.block_index,
                                                                                        None) or list()
             self.block_chain_history[block.block_index].insert(0, block)
+            log.info("new block: %s" % block)
             await self.peer_node_list.block_broadcast(block_no, block.prev_hash, block.merkel_root, block.timestamp)
 
     def is_block_valid(self, block: Block):
@@ -138,8 +139,6 @@ class Peer:
     # handle the peer messages: liveness request, liveness reply etc...
     async def handle_peer_messages(self, peer_node):
         while True:
-            log.debug("Awaiting on message")
-            log.debug("%s" % self.block_chain_history)
             data = await peer_node.read()
             if data is None:
                 break
@@ -165,7 +164,6 @@ class Peer:
             peer_node.writer = writer
             peer_node.reader = reader
             log.info("Connection from: %s %s" % (ip, port))
-            log.info("Message:\n%s" % data)
             if data['message_type'] == 'Registration_Request':
                 await self.handle_peer_messages(peer_node)
 
@@ -188,8 +186,12 @@ class Peer:
                     del_list.append(i)
                 else:
                     req_list.append(i)
+            prev_len = len(self.block_chain_history)
             for block_meta in del_list:
                 self.append_block(block_meta[1])
+            new_len = len(self.block_chain_history)
+            if new_len > prev_len:
+                self.new_mining_block = True
             self.block_queue = req_list
             await asyncio.sleep(1)
 
@@ -231,6 +233,7 @@ class Peer:
 
     async def process_pending_queue(self):
         await self.pending_queue_event.wait()
+        log.info("processing pending queue...")
         while True:
             if len(self.pending_queue) == 0:
                 await asyncio.sleep(1)
@@ -238,6 +241,10 @@ class Peer:
             block = self.pending_queue.popleft()
             if self.is_block_valid(block):
                 x = datetime.now() + timedelta(seconds=int(exp_rand_var())), block
+                for i in range(len(self.block_queue)):
+                    if self.block_queue[i][1].prev_hash == block.prev_hash:
+                        self.block_queue[i] = x
+                        return
                 self.block_queue.append(x)
 
     # The entry point to all functions
@@ -270,7 +277,6 @@ async def main():
     output_file = args.out or "output_peer:%s:%s.txt" % (args.ip, args.port)
     peer = Peer(ip=args.ip, port=args.port, output_file=output_file, input_file=args.input)
     await peer.start()
-
 
 if __name__ == "__main__":
     asyncio.run(main())
