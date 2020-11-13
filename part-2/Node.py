@@ -12,7 +12,7 @@ stdout_handler.setLevel(logging.CRITICAL)
 
 log.addHandler(stdout_handler)
 
-Block = namedtuple('Block', 'prev_hash merkel_root timestamp hash')
+Block = namedtuple('Block', 'block_index prev_hash merkel_root timestamp hash')
 
 
 # Node is the neighbouring peers/seeds as seen from peer
@@ -97,21 +97,6 @@ class PeerNode(Node):
     def is_connected_to_me(self):
         return self.connected_to_me
 
-    async def connect_to(self, ip, port):
-        try:
-            self.reader, self.writer = await asyncio.wait_for(asyncio.open_connection(self.ip, self.port), timeout=2)
-        except asyncio.TimeoutError:
-            log.debug("write operation cancelled due to timeout")
-        except ConnectionRefusedError:
-            log.debug("connection refused with {}:{}".format(self.ip, self.port))
-            return None
-
-        msg = {'message_type': 'Establish_Peer_Connection', 'SELF_IP': ip,
-               'SELF_PORT': port}
-        await self.write(msg)
-
-        return True
-
     async def send_block(self, block_no, prev_hash, merkel_root, timestamp):
         message = {'message_type': 'block_message',
                    'block_no': block_no,
@@ -121,16 +106,45 @@ class PeerNode(Node):
                    }
         await self.write(message)
 
-    async def block_no_reply(self, block_no, last_hash):
-        message = {'block_no_reply': block_no,
-                   'message_type': "block_no_reply",
-                   'last_hash': last_hash}
+    async def send_block_history_request(self):
+        message = {'message_type': 'block_history_request'}
         await self.write(message)
 
     async def send_block_history(self, block_history):
         message = {'message_type': 'block_history_reply',
                    'block_history': block_history}
         await self.write(message)
+
+    async def send_registration_request(self, ip, port):
+        try:
+            self.reader, self.writer = await asyncio.wait_for(asyncio.open_connection(self.ip, self.port), timeout=2)
+        except asyncio.TimeoutError:
+            log.debug("write operation cancelled due to timeout")
+        except ConnectionRefusedError:
+            log.debug("connection refused with {}:{}".format(self.ip, self.port))
+            return None
+
+        msg = {'message_type': 'Registration_Request', 'SELF_IP': ip,
+               'SELF_PORT': port}
+        await self.write(msg)
+
+    async def send_recent_block(self, block_history):
+        recent_blocks = block_history[-1]
+        block_no = len(block_history) - 1
+        msg = {'message_type': 'Recent_Blocks_Response',
+               'recent_blocks': recent_blocks,
+               'block_no': block_no}
+        await self.write(msg)
+
+    async def send_recent_block_request(self):
+        msg = {'message_type': 'Recent_Blocks_Request'}
+        await self.write(msg)
+
+    async def send_peer_list_request(self):
+        msg = {'message_type': 'Peer_List_Request'}
+        await self.write(msg)
+        data = (await self.read())[0]
+        return data['content']
 
 
 class NodeList:

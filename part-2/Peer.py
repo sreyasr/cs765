@@ -1,9 +1,8 @@
 import argparse
-import calendar
 import random
-import sys
 import time
-from datetime import timedelta, datetime
+from collections import deque
+from datetime import datetime, timedelta
 from hashlib import sha256
 
 import numpy
@@ -24,8 +23,9 @@ def get_hash(key):
     return sha256(key.encode()).hexdigest()[:4]
 
 
-def get_block(prev_hash, merkel_root, timestamp):
-    return Block(prev_hash, merkel_root, timestamp, get_hash("%s:%s:%s" % (prev_hash, merkel_root, timestamp)))
+def get_block(block_index, prev_hash, merkel_root, timestamp):
+    return Block(block_index, prev_hash, merkel_root, timestamp,
+                 get_hash("%s:%s:%s" % (prev_hash, merkel_root, timestamp)))
 
 
 def exp_rand_var():
@@ -61,6 +61,9 @@ class MessageList:
         return hash_item in self.dict
 
 
+genesis_block = Block(0, "0000", "0000", "27858", "9e1c")
+
+
 #  class peer to store information of peer
 class Peer:
     max_data = 8192
@@ -81,10 +84,15 @@ class Peer:
         self.peer_node_list = PeerNodeList()
         self.output_file = output_file
 
-        self.block_chain_history = [[Block("0000", "0000", "27858", "9e1c")]]
+        self.block_chain_history = {0: [genesis_block]}
         self.mining_time = 100
         self.new_block = False
         self.block_queue = list()
+        self.pending_queue = deque()
+        self.blocks_configured = False
+        self.recent_blocks_event = asyncio.Event()
+        self.pending_queue_event = asyncio.Event()
+        self.block_height = 0
 
         if output_file is not None:
             open(output_file, "w").close()
@@ -96,29 +104,23 @@ class Peer:
                 f.write(text + "\n")
         print(text)
 
-    def append_block(self):
-        prev_block = self.block_chain_history[-1][0]
-        prev_hash = prev_block.prev_hash
-        merkel_root = md5(str(random.randint(0, int(10e7))).encode()).hexdigest()[:4]
-        timestamp = calendar.timegm(time.gmtime())
-        x = [get_block(prev_hash, merkel_root, timestamp)]
-        self.block_chain_history.append(x)
+    def append_block(self, block):
+        (self.block_chain_history.get(block.block_index, None) or list()).append(block)
 
     async def mine_block(self):
-        while len(self.block_chain_history) == 0:
-            await asyncio.sleep(1)
-            break
+        await self.pending_queue_event.wait()
         while True:
             for _ in range(self.mining_time):
                 await asyncio.sleep(1)
                 if self.new_block:
                     break
-            self.append_block()
+            block_no = len(self.block_chain_history)
+            block = get_block(block_no, self.block_chain_history[block_no - 1][0].hash, "0000", str(int(time.time())))
+            (self.block_chain_history.get(block.block_index, None) or list()).insert(0, block)
 
-    def is_block_valid(self, block_no, block: Block):
-        if block_no < 1 or block_no > len(self.block_chain_history):
-            return False
-        lm = self.block_chain_history[block_no - 1]
+    def is_block_valid(self, block: Block):
+        block_no = block.block_index
+        lm = self.block_chain_history[block_no]
         i: Block
         for i in lm:
             if isinstance(i, Block):
@@ -132,13 +134,22 @@ class Peer:
     def process(self, peer_node, data):
         if data['message_type'] == 'block_message':
             block = Block(data['prev_hash'], data['timestamp'], data['merkel_root'])
-            if self.is_block_valid(data['block_no'], block):
-                block_meta = datetime.now() + timedelta(seconds=int(exp_rand_var())), data['block_no'], block
-                self.block_queue.append(block_meta)
-        elif data['message_type'] == 'block_no_request':
-            peer_node.block_no_reply(len(self.block_chain_history), self.block_chain_history[-1])
+            self.pending_queue.append(block)
         elif data['message_type'] == 'block_history_request':
             peer_node.send_block_history(self.block_chain_history)
+        elif data['message_type'] == 'recent_block_request':
+            peer_node.send_recent_block(self.block_chain_history)
+        elif data['message_type'] == 'block_history_reply':
+            block_history = data['block_history']
+            for key, value in block_history.items():
+                block_no = int(key)
+                blocks = list(map(lambda x: Block(block_no, *x[1:]), value))
+                self.block_chain_history[block_no] = blocks
+        elif data['message_type'] == 'Recent_Blocks_Response':
+            recent_blocks = data['recent_blocks']
+            block_no = data['block_no']
+            blocks = map(lambda x: Block(block_no, *x[1:]), recent_blocks)
+            self.block_chain_history[block_no] = list(blocks)
 
     # handle the peer messages: liveness request, liveness reply etc...
     async def handle_peer_messages(self, peer_node):
@@ -172,16 +183,7 @@ class Peer:
                 if peer_address not in self.total_peer_list:
                     self.total_peer_list.append(peer_address)
 
-                message = dict()
-                message['message_type'] = 'Registration_Response'
-                message['peer_list'] = self.total_peer_list + [(self.ip, self.port)]
-                message['block_chain'] = self.block_chain_history[-1]
-                message['block_no'] = len(self.block_chain_history) - 1
-
-                writer.write(Node.encode_data(message))
-                await writer.drain()
-
-            await self.handle_peer_messages(peer_node)
+                await self.handle_peer_messages(peer_node)
 
         async def run_server(host, port):
             server = await asyncio.start_server(main_server, host, port)
@@ -192,6 +194,7 @@ class Peer:
         return await run_server(self.ip, self.port)
 
     async def consume_block_queue(self):
+        await self.pending_queue_event.wait()
         while True:
             req_list = []
             del_list = []
@@ -200,16 +203,8 @@ class Peer:
                     del_list.append(i)
                 else:
                     req_list.append(i)
-            for i in del_list:
-                block_meta = i
-                if block_meta[1] == len(self.block_chain_history):
-                    x = [get_block(block_meta[2].prev_hash, block_meta[2].merkel_root, block_meta[2].timestamp)]
-                    self.block_chain_history[block_meta[1]].append(x)
-                else:
-                    x = get_block(block_meta[2].prev_hash, block_meta[2].merkel_root, block_meta[2].timestamp)
-                    self.block_chain_history[block_meta[1]].append(x)
-                await self.peer_node_list.block_broadcast(block_meta[1], block_meta[2].prev_hash,
-                                                          block_meta[2].merkel_root, block_meta[2].timestamp)
+            for block_meta in del_list:
+                self.append_block(block_meta[1])
             self.block_queue = req_list
             await asyncio.sleep(1)
 
@@ -229,64 +224,39 @@ class Peer:
 
     # return the entire list of peer received from seeds
     async def get_peer_from_seed(self, seed_list):
-        last_blocks = []
         peer_list = []
-        block_nos = []
-        for i in seed_list:
-            ip = i[0]
-            port = i[1]
-            try:
-                reader, writer = await asyncio.wait_for(asyncio.open_connection(ip, port),
-                                                        timeout=3)
-            except ConnectionRefusedError:
-                log.debug("PeerNode Refused Connection: %r:%r" % (self.ip, self.port))
-                continue
-            message = {
-                'message_type': 'Registration_Request',
-                'SELF_IP': ip,
-                'SELF_PORT': port
-            }
-            writer.write(Node.encode_data(message))
-            await writer.drain()
-            data = await reader.read(Node.max_size)
-            data = Node.decode_data(data)[0]
-
-            peer_list.extend(data["peer_list"])
-            last_blocks.append(data['block_chain'])
-            block_nos.append(data['block_no'])
-
-        for i in range(len(last_blocks)):
-            pass
-        self.total_peer_list.extend(peer_list)
-
-        if peer_list:
-            self.total_peer_list = list(set(self.total_peer_list) - {(self.ip, self.port)})
-            print("Peers received from seed: %s" % self.total_peer_list)
-            return self.total_peer_list
-        else:
-            self.flush_out("Can't connect to any Peers exiting....")
-            sys.exit()
+        for address in seed_list:
+            peer_node = PeerNode(address[0], address[1], False)
+            await peer_node.send_registration_request(self.ip, self.port)
+            peer_list.append(peer_node)
+        return peer_list
 
     async def establish_peer_connection(self, peer_list):
-        t = list()
-        for address in peer_list:
-            try:
-                peer_node = PeerNode(address[0], address[1], False)
-                t.append(peer_node)
-                self.peer_node_list.append(peer_node)
-            except:
-                pass
-        g1 = await asyncio.gather(*[i.connect_to(self.ip, self.port) for i in t])
+        self.peer_list = list(set(peer_list))
+        self.total_peer_list = list(set(self.total_peer_list + self.peer_list))
 
-        # setting ConnectionRefusedError as dead
-        failed_peer_node = [t[i] for i in range(len(t)) if g1[i] is None]
-        timestamp = str(datetime.now())
-        for peer_node in failed_peer_node:
-            self.flush_out("Dead Node:%s:%s:%s:%s:%s" % (
-                peer_node.ip, peer_node.port, timestamp, self.ip, self.port))
+        await asyncio.gather(*[self.handle_peer_messages(i) for i in self.peer_list])
 
-        [self.peer_node_list.remove_peer_node(peer_node) for peer_node in failed_peer_node]
-        await asyncio.gather(*[self.handle_peer_messages(i) for i in t if i not in failed_peer_node])
+    async def initial_set_up(self):
+        while len(self.peer_list) == 0:
+            await asyncio.sleep(3)
+        if len(self.peer_list) == 0:
+            return
+        peer_node = self.peer_list[0]
+        await peer_node.send_recent_block_request()
+        await self.recent_blocks_event.wait()
+        peer_node.send_recent_block_request()
+
+    async def process_pending_queue(self):
+        while self.blocks_configured is False:
+            await asyncio.sleep(2)
+
+        while True:
+            block = self.pending_queue.popleft()
+            if self.is_block_valid(block):
+                x = datetime.now() + timedelta(seconds=int(exp_rand_var())), block
+                self.block_queue.append(x)
+                raise NotImplementedError
 
     # The entry point to all functions
     async def start(self):
@@ -302,13 +272,10 @@ class Peer:
         seed_list = random.sample(
             self.total_seed_list, required_seed_number)
         # get peer from the seeds
-        await self.get_peer_from_seed(seed_list)
-        # choose the peers that are going to be connected
-        peer_list = random.sample(
-            self.total_peer_list, min(4, len(self.total_peer_list)))
+        peer_list = await self.get_peer_from_seed(seed_list)
 
         await asyncio.gather(main_server.serve_forever(), self.establish_peer_connection(peer_list),
-                             self.consume_block_queue())
+                             self.consume_block_queue(), self.process_pending_queue())
 
 
 async def main():
