@@ -85,6 +85,7 @@ class Peer:
             try:
                 await asyncio.wait_for(self.new_mining_block_event.wait(), timeout=exp_rand_var())
                 log.debug("new block received. Mining Discontinued")
+                await asyncio.sleep(1)
                 self.new_mining_block_event.clear()
             except asyncio.TimeoutError:
                 block_no = len(self.block_chain_history)
