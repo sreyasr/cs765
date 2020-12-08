@@ -5,7 +5,7 @@ from collections import namedtuple
 from hashlib import md5
 
 log = logging.getLogger(__name__)
-log.setLevel(logging.DEBUG)
+log.setLevel(logging.ERROR)
 
 stdout_handler = logging.StreamHandler()
 stdout_handler.setLevel(logging.DEBUG)

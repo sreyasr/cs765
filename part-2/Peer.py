@@ -9,10 +9,10 @@ import Node
 from Node import *
 
 log = logging.getLogger(__name__)
-log.setLevel(logging.DEBUG)
+log.setLevel(logging.INFO)
 
 stdout_handler = logging.StreamHandler()
-stdout_handler.setLevel(logging.INFO)
+stdout_handler.setLevel(logging.DEBUG)
 
 log.addHandler(stdout_handler)
 
@@ -67,14 +67,8 @@ class Peer:
         if output_file is not None:
             open(output_file, "w").close()
 
-    # function to print to screen and file
-    def flush_out(self, text):
-        if self.output_file is not None:
-            with open(self.output_file, 'a') as f:
-                f.write(text + "\n")
-        print(text)
-
     def append_block(self, block):
+        log.info("Block_Added: {}".format(block))
         self.block_chain_history[block.block_index] = (self.block_chain_history.get(block.block_index, None) or list())
         self.block_chain_history[block.block_index].append(block)
 
@@ -98,6 +92,8 @@ class Peer:
                 log.info("New_Block_Created: {}".format(block))
 
     def is_block_valid(self, block: Block):
+        if block.merkel_root == "-1":
+            return False
         block_no = block.block_index
         if block_no - 1 not in self.block_chain_history.keys():
             return False
@@ -196,7 +192,9 @@ class Peer:
                 port = int(address[1])
                 address = (ip, port)
                 seed_list.append(address)
-        return list(set(seed_list))
+        if len(seed_list) == 0:
+            self.pending_queue_event.set()
+        return seed_list
 
     # return the entire list of peer received from seeds
     async def get_peer_from_seed(self, seed_list):
@@ -229,10 +227,10 @@ class Peer:
                 continue
             block = self.pending_queue.popleft()
             if self.is_block_valid(block):
-                log.info("Received_Valid_Block: {}".format(block))
+                log.debug("Received_Valid_Block: {}".format(block))
                 self.append_block(block)
             else:
-                log.info("Received_Invalid_Block: {}".format(block))
+                log.debug("Received_Invalid_Block: {}".format(block))
 
     # The entry point to all functions
     async def start(self):
@@ -261,6 +259,9 @@ async def main():
     parser.add_argument("-out", "--out", type=str, help="File to write the output of Peer.py")
     args = parser.parse_args()
     output_file = args.out or "output_peer:%s:%s.txt" % (args.ip, args.port)
+    file_handler = logging.FileHandler(output_file, mode='w')
+    file_handler.setLevel(logging.DEBUG)
+    log.addHandler(file_handler)
     peer = Peer(ip=args.ip, port=args.port, output_file=output_file, input_file=args.input)
     await peer.start()
 
